@@ -1,13 +1,19 @@
-<cfset oW = createObject("component","wallet").init(ipAddress="127.0.0.1") />
-
-<cfset stNetwork = application.ada.oW.networkInformation() />
-
-<cfdump var="#stNetwork#" />
 
 
-<cfset oA = createObject("component","address").init("/path/to/cardano-address") />
+<cfset oW = createObject("component","wallet").init() />
 
-<cfset mnemonic = application.ada.oW.generatePhrase() />
+<cfset stNetwork = oW.networkInformation() />
 
-<cfdump var="#mnemonic#">
+<cfif stNetwork.bSuccess>
+	<cfdump var="#stNetwork.data#" />
+</cfif>
+
+
+<cfset oA = createObject("component","address").init(expandPath("./")) />
+
+<cfset stMnemonic = oW.generatePhrase() />
+
+<cfif stMnemonic.bSuccess>
+	<cfdump var="#stMnemonic.data#">
+</cfif>
 
