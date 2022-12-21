@@ -1,7 +1,7 @@
 <!-- ABOUT THE PROJECT -->
 ## About The Project
 
-cf_cardanowallet facilitates communication between a coldfusion server and the Cardano blockchain via the official [cardano-wallet](https://github.com/input-output-hk/cardano-wallet)
+API wrapper for Cardano Wallet facilitates communication between a ColdFusion server and the Cardano blockchain via the official [cardano-wallet](https://github.com/input-output-hk/cardano-wallet)
 
 
 ### Prerequisites
