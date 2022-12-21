@@ -14,7 +14,7 @@ API wrapper for Cardano Wallet facilitates communication between a ColdFusion se
 
 Clone the repo
    ```sh
-   git clone https://github.com/fangio10/cf_cardanowallet.git
+   git clone https://github.com/fangio10/ColdFusion-API-wrapper-for-Cardano-Wallet.git
    ```
 
 <!-- USAGE EXAMPLES -->
@@ -72,4 +72,4 @@ Distributed under the APACHE License 2.0. See `LICENSE` for more information.
 
 Franco - [@adaversePools](https://twitter.com/AdaversePools) - staking@adaverse.com
 
-Project Link: [https://github.com/fangio10/cf_cardanowallet](https://github.com/fangio10/cf_cardanowallet)
+Project Link: [https://github.com/fangio10/ColdFusion-API-wrapper-for-Cardano-Wallet](https://github.com/fangio10/ColdFusion-API-wrapper-for-Cardano-Wallet)
