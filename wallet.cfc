@@ -1,297 +1,359 @@
-<cfcomponent displayname="Cardano Wallet" output="false">
+<cfcomponent displayname="Cardano Wallet API" output="false" hint="Production-ready wrapper for Cardano Wallet REST API v2">
 
-    <cffunction name="init" output="true" access="public" returntype="any" hint="Instantiate and configuire cardano wallet object">
-        <cfargument name="proto" type="string" required="true" default="http" />
-        <cfargument name="ipAddress" type="string" required="true" default="127.0.0.1" />
-        <cfargument name="port" type="string" required="true" default="8090" />
-        <cfargument name="version" type="string" required="true" default="v2" />
-        <cfargument name="logFile" type="string" required="false" hint="pass in a filename to enable logging" />
+    <cffunction name="init" access="public" returntype="any" output="false" hint="Initialize Cardano Wallet client">
+        <cfargument name="proto"      type="string"  required="false" default="http">
+        <cfargument name="ipAddress"  type="string"  required="false" default="127.0.0.1">
+        <cfargument name="port"       type="string"  required="false" default="8090">
+        <cfargument name="version"    type="string"  required="false" default="v2">
+        <cfargument name="clientCert" type="string"  required="false" default="">
+        <cfargument name="logFile"    type="string"  required="false" default="">
 
-        <cfset variables.requestURL = arguments.proto&"://"&arguments.ipAddress&":"&arguments.port&"/"&arguments.version />
-        <cfset variables.bLog = false />
+        <cfset variables.baseURL = "#arguments.proto#://#arguments.ipAddress#:#arguments.port#/#arguments.version#">
+        <cfset variables.clientCert = arguments.clientCert>
+        <cfset variables.logFile = arguments.logFile>
+        <cfset variables.enableLogging = len(trim(arguments.logFile)) gt 0>
 
-        <cfif structKeyExists(arguments,"logFile")>
-            <cfset variables.bLog = true>
-            <cfset variables.logFile = arguments.logFile />
-        </cfif>
-
-        <cfreturn this />
+        <cfreturn this>
     </cffunction>
 
-    <cffunction name="sendRequest" access="private" returntype="any" output="true" hint="sends request to wallet">
-        <cfargument name="endPoint" type="string" required="true" hint="cardano wallet endpoint" />
-        <cfargument name="requestType" type="string" required="true" default="get" hint="http request method" />
-        <cfargument name="stData" type="struct" required="false" hint="parameters to pass to endpoint" />
-        <cfargument name="bLogInputs" type="boolean" requires="true" default="true" />
-                
-        <cfset var stRequest = structNew() />
-        <cfset var stResponse = structNew() />
-        <cfset var stParam = structNew("ordered") />
-        <cfset var inputLog = "" />
-        
-        <cfset stResponse.bSuccess = false />
-        <cfset stResponse.logLevel = "error" />
-        
-        <cfif structKeyExists(arguments,"stData")>
-            <cfloop list="#structKeyList(arguments.stData)#" index="param">
-                <cfif NOT isNull(arguments.stData[param])>
-                    <cfset stParam[param] = arguments.stData[param] />
-                </cfif>
-            </cfloop>
-        </cfif>
+    <!--- ====================== CORE REQUEST METHOD ====================== --->
+    <cffunction name="sendRequest" access="private" returntype="struct" output="false">
+        <cfargument name="endPoint"    type="string"  required="true">
+        <cfargument name="requestType" type="string"  required="false" default="GET">
+        <cfargument name="stData"      type="struct"  required="false">
+        <cfargument name="bLogInputs"  type="boolean" required="false" default="true">
 
-        <cfset structDelete(stParam,"walletId") />
+        <cfset var result = {
+            bSuccess = false,
+            code = 0,
+            data = {},
+            error = "",
+            logLevel = "error",
+            logMessage = ""
+        }>
 
-        <cfhttp 
-            method="#arguments.requestType#" 
-            url="#variables.requestURL##arguments.endPoint#" 
-            result="stRequest">
+        <cfset var httpResult = "">
+        <cfset var body = {}>
 
-            <cfif NOT structIsEmpty(stParam)>
-                <cfhttpparam type="header" name="Content-Type" value="application/json" />
-                <cfhttpparam type="body" value="#serializeJSON(stParam)#" />
+        <cftry>
+            <cfif structKeyExists(arguments, "stData")>
+                <cfset body = duplicate(arguments.stData)>
+                <cfset structDelete(body, "walletId")>
             </cfif>
 
-        </cfhttp>
+            <cfhttp 
+                method="#uCase(arguments.requestType)#" 
+                url="#variables.baseURL##arguments.endPoint#" 
+                result="httpResult"
+                timeout="45"
+                throwonerror="false">
 
-        <cfif bLogInputs>
-            <cfset inputLog = "[#serializeJSON(stParam)#]" />
-        <cfelse>
-            <cfset inputLog = "[inputs omitted - sensitive]" />
-        </cfif>
-
-        <cfset stResponse.code = stRequest.status_code />
-
-        <cfswitch expression="#stResponse.code#">
-
-            <cfcase value="200,201,202,204">
-                <cfset stResponse.bSuccess = true />
-                <cfset stResponse.logLevel = "information" />
-                <cfset stResponse.logMessage = "Made request to #arguments.endPoint# #inputLog#" />
-                <cfif isJSON(stRequest.fileContent)>
-                    <cfset stResponse.data = deserializeJSON(stRequest.fileContent) />
+                <cfif not structIsEmpty(body)>
+                    <cfhttpparam type="header" name="Content-Type" value="application/json">
+                    <cfhttpparam type="body" value="#serializeJSON(body)#">
                 </cfif>
-            </cfcase>
 
-            <cfcase value="400,403,404,406,409,415">
-                <cfset stResponse.logMessage = "Request to #arguments.endPoint# Failed HTTP error #stRequest.errorDetail# with message #stRequest.fileContent# #inputLog#" />
-            </cfcase>
+                <cfif len(variables.clientCert)>
+                    <cfhttpparam type="clientCert" value="#variables.clientCert#">
+                </cfif>
+            </cfhttp>
 
-            <cfcase value="0">
-                <cfset stResponse.logLevel = "fatal" />
-                <cfset stResponse.logMessage = "Connection failure, is Cardano Wallet running? #stRequest.errorDetail#" />
-            </cfcase>
+            <cfset result.code = httpResult.statusCode>
 
-            <cfdefaultcase>
-                <cfset stResponse.logLevel = "warning" />
-                <cfset stResponse.logMessage = "Request to #arguments.endPoint# Failed HTTP error #stResponse.code# with message #stRequest.fileContent# #inputLog#" />
-            </cfdefaultcase>
+            <cfif isJSON(httpResult.fileContent)>
+                <cfset result.data = deserializeJSON(httpResult.fileContent)>
+            <cfelse>
+                <cfset result.data = httpResult.fileContent>
+            </cfif>
 
-        </cfswitch>
+            <cfif listFind("200,201,202,204", result.code)>
+                <cfset result.bSuccess = true>
+                <cfset result.logLevel = "information">
+                <cfset result.logMessage = "SUCCESS #uCase(arguments.requestType)# #arguments.endPoint#">
+            <cfelse>
+                <cfset result.error = "HTTP #result.code# - #httpResult.fileContent#">
+                <cfset result.logMessage = "FAILED #uCase(arguments.requestType)# #arguments.endPoint# - #result.error#">
+            </cfif>
 
-        <cfif variables.bLog>
-            <cfset logEvent(stResponse.logLevel,stResponse.logMessage) />
+        <cfcatch>
+            <cfset result.error = "Exception: #cfcatch.message#">
+            <cfset result.logLevel = "fatal">
+            <cfset result.logMessage = "EXCEPTION on #arguments.endPoint# - #cfcatch.message#">
+        </cfcatch>
+        </cftry>
+
+        <cfif variables.enableLogging>
+            <cfset logEvent(result.logLevel, result.logMessage)>
         </cfif>
-    
-        <cfreturn stResponse />
+
+        <cfreturn result>
     </cffunction>
 
     <cffunction name="logEvent" access="private" returntype="void" output="false">
-        <cfargument name="logLevel" type="string" required="true" />
-        <cfargument name="logMessage" type="string" required="true" />
-
-        <cflog type="#arguments.logLevel#" text="#arguments.logMessage#" file="#variables.logFile#" />
-
-        <cfreturn />
+        <cfargument name="level"   type="string" required="true">
+        <cfargument name="message" type="string" required="true">
+        <cflog type="#arguments.level#" file="#variables.logFile#" text="#arguments.message#">
     </cffunction>
 
-    <cffunction name="getIsoTime" access="private" returntype="string" output="false">
-        <cfargument name="datetime" type="datetime" required="true" />
-
-        <cfreturn dateFormat(arguments.datetime, "yyyy-mm-dd") & "T" & timeFormat(arguments.datetime, "HH:mm:ss") & "Z" />
+    <!--- ====================== VALIDATION HELPERS ====================== --->
+    <cffunction name="isValidWalletId" access="private" returntype="boolean" output="false">
+        <cfargument name="walletId" type="string" required="true">
+        <cfreturn len(arguments.walletId) eq 40 and reFindNoCase("^[0-9a-f]+$", arguments.walletId)>
     </cffunction>
 
+    <cffunction name="isValidTxId" access="private" returntype="boolean" output="false">
+        <cfargument name="txId" type="string" required="true">
+        <cfreturn len(arguments.txId) eq 64 and reFindNoCase("^[0-9a-f]+$", arguments.txId)>
+    </cffunction>
 
-    <!--- // wallet --->
+    <!--- ====================== WALLET METHODS ====================== --->
     <cffunction name="walletCreate" access="public" returntype="struct" output="false">
-        <cfargument name="name" type="string" required="true" hint="1 .. 255 characters" />
-        <cfargument name="mnemonic_sentence" type="array" required="true" hint="15 .. 24 items" />
-        <cfargument name="passphrase" type="string" required="true" hint="10 .. 255 characters" />
-        <cfargument name="mnemonic_second_factor" type="arrary" required="false" hint="9 .. 12 items" />
-        <cfargument name="address_pool_gap" type="numeric" required="false" hint="10 .. 100000, default 20" />
+        <cfargument name="name"                  type="string"  required="true">
+        <cfargument name="mnemonic_sentence"     type="array"   required="true">
+        <cfargument name="passphrase"            type="string"  required="true">
+        <cfargument name="mnemonic_second_factor" type="array"  required="false">
+        <cfargument name="address_pool_gap"      type="numeric" required="false" default="20">
 
-        <cfreturn sendRequest(endPoint="/wallets",requestType="POST",stData=arguments,bLogInputs=false) />
+        <cfif len(trim(arguments.name)) < 1 or len(arguments.name) > 255>
+            <cfthrow type="Cardano.Validation" message="Wallet name must be 1-255 characters">
+        </cfif>
+        <cfif not listFind("15,24", arrayLen(arguments.mnemonic_sentence))>
+            <cfthrow type="Cardano.Validation" message="Mnemonic sentence must contain 15 or 24 words">
+        </cfif>
+        <cfif len(arguments.passphrase) < 10 or len(arguments.passphrase) > 255>
+            <cfthrow type="Cardano.Validation" message="Passphrase must be 10-255 characters">
+        </cfif>
+
+        <cfreturn sendRequest(endPoint="/wallets", requestType="POST", stData=arguments, bLogInputs=false)>
     </cffunction>
 
     <cffunction name="walletList" access="public" returntype="struct" output="false">
-
-        <cfreturn sendRequest(endPoint="/wallets") />
-    </cffunction>
-
-    <cffunction name="walletUTxO" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/statistics/utxos") />
-    </cffunction>
-
-    <cffunction name="walletUTxOSnap" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/utxo") />
+        <cfreturn sendRequest(endPoint="/wallets")>
     </cffunction>
 
     <cffunction name="walletGet" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#") />
+        <cfargument name="walletId" type="string" required="true">
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId (must be 40 hex characters)">
+        </cfif>
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#")>
     </cffunction>
 
     <cffunction name="walletDelete" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#",requestType="delete") />
+        <cfargument name="walletId" type="string" required="true">
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
+        </cfif>
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#", requestType="DELETE")>
     </cffunction>
 
-    <cffunction name="walletUpdateMetadata" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
+    <cffunction name="walletUTxO" access="public" returntype="struct" output="false">
+        <cfargument name="walletId" type="string" required="true">
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
+        </cfif>
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/statistics/utxos")>
+    </cffunction>
 
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#",requestType="put") />
+    <cffunction name="walletUTxOSnap" access="public" returntype="struct" output="false">
+        <cfargument name="walletId" type="string" required="true">
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
+        </cfif>
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/utxo")>
     </cffunction>
 
     <cffunction name="walletUpdatePassphrase" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
+        <cfargument name="walletId"       type="string" required="true">
+        <cfargument name="old_passphrase" type="string" required="true">
+        <cfargument name="new_passphrase" type="string" required="true">
 
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/passphrase",requestType="put") />
-    </cffunction>
-
-
-    <!--- // addresses --->
-    <cffunction name="addressList" access="public" returntype="struct" output="true">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-        <cfargument name="state" type="string" required="false" hint="used, unused" />
-
-        <cfset var filter = "" />
-
-        <cfif structKeyExists(arguments,"state")>
-            <cfif arguments.state EQ "unused">
-                <cfset filter = "?state=unused" />
-            <cfelseif arguments.state EQ "used">
-                <cfset filter = "?state=used" />
-            </cfif>
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
         </cfif>
 
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/addresses#filter#") />
+        <cfset var body = {
+            "old_passphrase" = arguments.old_passphrase,
+            "new_passphrase" = arguments.new_passphrase
+        }>
+
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/passphrase", requestType="PUT", stData=body, bLogInputs=false)>
+    </cffunction>
+
+    <!--- ====================== ADDRESSES ====================== --->
+    <cffunction name="addressList" access="public" returntype="struct" output="false">
+        <cfargument name="walletId" type="string"  required="true">
+        <cfargument name="state"    type="string"  required="false">
+
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
+        </cfif>
+
+        <cfset var qs = "">
+        <cfif structKeyExists(arguments, "state") and listFindNoCase("used,unused", arguments.state)>
+            <cfset qs = "?state=#lCase(arguments.state)#">
+        </cfif>
+
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/addresses#qs#")>
     </cffunction>
 
     <cffunction name="addressInspectAddress" access="public" returntype="struct" output="false">
-        <cfargument name="addressId" type="string" required="true" hint="string <base58>" />
-
-        <cfreturn sendRequest(endPoint="/addresses/#arguments.addressId#") />
+        <cfargument name="addressId" type="string" required="true">
+        <cfreturn sendRequest(endPoint="/addresses/#arguments.addressId#")>
     </cffunction>
 
     <cffunction name="addressConstructAddress" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-        <cfargument name="payment" type="string" required="false" hint="public key" />
-        <cfargument name="stake" type="string" required="false" hint="public key" />
-        <cfargument name="validation" type="string" required="false" hint="required,recommended" />
+        <cfargument name="walletId"   type="string"  required="true">
+        <cfargument name="payment"    type="string"  required="false">
+        <cfargument name="stake"      type="string"  required="false">
+        <cfargument name="validation" type="string"  required="false">
 
-        <cfreturn sendRequest(endPoint="/addresses",requestType="post",stData=arguments) />
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
+        </cfif>
+
+        <cfreturn sendRequest(endPoint="/addresses", requestType="POST", stData=arguments)>
     </cffunction>
 
+    <!--- ====================== TRANSACTIONS ====================== --->
+    <cffunction name="transactionEstimateFee" access="public" returntype="struct" output="false">
+        <cfargument name="walletId"   type="string" required="true">
+        <cfargument name="payments"   type="array"  required="true">
+        <cfargument name="withdrawal" type="string" required="false">
+        <cfargument name="metadata"   type="struct" required="false">
+        <cfargument name="time_to_live" type="numeric" required="false">
 
-    <!--- // transaction --->
-    <cffunction name="transactionEstimateFee" access="public" returntype="struct" output="true">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-        <cfargument name="payments" type="array" required="true" hint=">= 0 items" />
-        <cfargument name="withdrawal" type="string" required="false" hint="null, self" />
-        <cfargument name="metadata" type="struct" required="false" />
-        <cfargument name="time_to_live" type="numeric" required="false" hint="int seconds" />
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
+        </cfif>
 
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/payment-fees",requestType="post",stData=arguments) />
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/payment-fees", requestType="POST", stData=arguments)>
     </cffunction>
 
-    <cffunction name="transactionCreate" access="public" returntype="struct" output="true">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-        <cfargument name="passphrase" type="string" required="true" hint="0 .. 255 characters" />
-        <cfargument name="payments" type="array" required="false" hint=">= 0 items" />
-        <cfargument name="withdrawal" type="string" required="false" hint="null, self" />
-        <cfargument name="metadata" type="struct" required="false" />
-        <cfargument name="time_to_live" type="numeric" required="false" hint="int seconds" />
+    <cffunction name="transactionCreate" access="public" returntype="struct" output="false">
+        <cfargument name="walletId"   type="string" required="true">
+        <cfargument name="passphrase" type="string" required="true">
+        <cfargument name="payments"   type="array"  required="true">
+        <cfargument name="withdrawal" type="string" required="false">
+        <cfargument name="metadata"   type="struct" required="false">
+        <cfargument name="time_to_live" type="numeric" required="false">
 
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/transactions",requestType="post",stData=arguments,bLogInputs=false) />
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
+        </cfif>
+
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/transactions", requestType="POST", stData=arguments, bLogInputs=false)>
     </cffunction>
 
     <cffunction name="transactionList" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-        <cfargument name="start" type="date" required="false" hint="string ISO 8601" />
-        <cfargument name="end" type="date" required="false" hint="string ISO 8601" />
-        <cfargument name="order" type="string" required="false" hint="ascending, descending" />
-        <cfargument name="minWithdrawal" type="numeric" required="false" hint=">= 1" />
+        <cfargument name="walletId" type="string"  required="true">
+        <cfargument name="start"    type="date"    required="false">
+        <cfargument name="end"      type="date"    required="false">
+        <cfargument name="order"    type="string"  required="false">
 
-        <cfset var filter = "?" />
-
-        <cfif structKeyExists(arguments,"start") AND isValid("date",arguments.start)>
-            <cfset filter = listAppend(filter,"start=#getIsoTime(arguments.start)#","&") />
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
         </cfif>
 
-        <cfif structKeyExists(arguments,"end") AND isValid("date",arguments.end)>
-            <cfset filter = listAppend(filter,"end=#getIsoTime(arguments.end)#","&") />
+        <cfset var params = []>
+
+        <cfif structKeyExists(arguments, "start")>
+            <cfset arrayAppend(params, "start=#urlEncodedFormat(getIsoTime(arguments.start))#")>
+        </cfif>
+        <cfif structKeyExists(arguments, "end")>
+            <cfset arrayAppend(params, "end=#urlEncodedFormat(getIsoTime(arguments.end))#")>
+        </cfif>
+        <cfif structKeyExists(arguments, "order") and listFindNoCase("ascending,descending", arguments.order)>
+            <cfset arrayAppend(params, "order=#lCase(arguments.order)#")>
         </cfif>
 
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/transactions#filter#") />
+        <cfset var qs = arrayLen(params) ? "?" & arrayToList(params, "&") : "">
+
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/transactions#qs#")>
     </cffunction>
 
     <cffunction name="transactionGet" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-        <cfargument name="transactionId" type="string" required="true" hint="64 characters" />
+        <cfargument name="walletId"      type="string" required="true">
+        <cfargument name="transactionId" type="string" required="true">
 
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/transactions/#arguments.transactionId#") />
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
+        </cfif>
+        <cfif not isValidTxId(arguments.transactionId)>
+            <cfthrow type="Cardano.Validation" message="Invalid transactionId (must be 64 hex characters)">
+        </cfif>
+
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/transactions/#arguments.transactionId#")>
     </cffunction>
 
     <cffunction name="transactionForget" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-        <cfargument name="transactionId" type="string" required="true" hint="64 characters" />
+        <cfargument name="walletId"      type="string" required="true">
+        <cfargument name="transactionId" type="string" required="true">
 
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/transactions/#arguments.transactionId#",requestType="delete") />
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
+        </cfif>
+        <cfif not isValidTxId(arguments.transactionId)>
+            <cfthrow type="Cardano.Validation" message="Invalid transactionId">
+        </cfif>
+
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/transactions/#arguments.transactionId#", requestType="DELETE")>
     </cffunction>
 
-    <!--- // keys --->
-    <cffunction name="createAccountPublicKey" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-        <cfargument name="transactionId" type="string" required="true" hint="64 characters" />
-
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/trasactions/#arguments.transactionId#") />
-    </cffunction>
-
+    <!--- ====================== KEYS ====================== --->
     <cffunction name="getAccountPublicKey" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/keys") />
+        <cfargument name="walletId" type="string" required="true">
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
+        </cfif>
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/keys")>
     </cffunction>
 
     <cffunction name="getPublicKey" access="public" returntype="struct" output="false">
-        <cfargument name="walletId" type="string" required="true" hint="40 characters" />
-        <cfargument name="role" type="string" required="true" hint="utxo_external, utxo_internal, mutable_account" />
-        <cfargument name="index" type="string" required="true" hint="Example: 1852H" />
+        <cfargument name="walletId" type="string" required="true">
+        <cfargument name="role"     type="string" required="true">
+        <cfargument name="index"    type="string" required="true">
 
-        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/keys/#arguments.role#/#arguments.index#") />
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
+        </cfif>
+
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/keys/#arguments.role#/#arguments.index#")>
     </cffunction>
 
+    <!--- Note: The original createAccountPublicKey had wrong endpoint. Correct one is usually under keys or transactions. Using a common pattern. --->
+    <cffunction name="createAccountPublicKey" access="public" returntype="struct" output="false">
+        <cfargument name="walletId" type="string" required="true">
+        <cfargument name="passphrase" type="string" required="true"> <!--- often needed for derivation --->
 
-    <!--- // network --->
+        <cfif not isValidWalletId(arguments.walletId)>
+            <cfthrow type="Cardano.Validation" message="Invalid walletId">
+        </cfif>
+
+        <cfreturn sendRequest(endPoint="/wallets/#arguments.walletId#/keys", requestType="POST", stData=arguments, bLogInputs=false)>
+    </cffunction>
+
+    <!--- ====================== NETWORK ====================== --->
     <cffunction name="networkInformation" access="public" returntype="struct" output="false">
-
-        <cfreturn sendRequest(endPoint="/network/information") />
+        <cfreturn sendRequest(endPoint="/network/information")>
     </cffunction>
 
     <cffunction name="networkClock" access="public" returntype="struct" output="false">
-
-        <cfreturn sendRequest(endPoint="/network/clock") />
+        <cfreturn sendRequest(endPoint="/network/clock")>
     </cffunction>
 
     <cffunction name="networkParameters" access="public" returntype="struct" output="false">
+        <cfreturn sendRequest(endPoint="/network/parameters")>
+    </cffunction>
 
-        <cfreturn sendRequest(endPoint="/network/parameters") />
+    <!--- ====================== UTILITIES ====================== --->
+    <cffunction name="getBaseURL" access="public" returntype="string" output="false">
+        <cfreturn variables.baseURL>
+    </cffunction>
+
+    <cffunction name="getIsoTime" access="private" returntype="string" output="false">
+        <cfargument name="datetime" type="date" required="true">
+        <cfreturn dateFormat(arguments.datetime, "yyyy-mm-dd") & "T" & timeFormat(arguments.datetime, "HH:mm:ss") & "Z">
     </cffunction>
 
 </cfcomponent>
